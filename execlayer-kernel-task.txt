@@ -1,0 +1,446 @@
+
+# ExecLayer Kernel v1.0 – Repo Update Task
+
+You are an AI coding agent connected to my GitHub repo for execlayer.io.
+
+Your job: create or update the following files with exactly the contents specified below.
+
+Do not change anything else in the repo.
+
+## File: api/index.py
+
+```python
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
+import os
+import sys
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from execlayer_kernel.kernel import ExecLayerKernel
+from execlayer_kernel.context import Actor, Intent, ExecutionContext
+from execlayer_kernel.policy_bundle import PolicyBundle
+from execlayer_kernel.rules import (
+    RuleBlockPublicPIIUpload,
+    RuleBlockSelfPromptRewrite,
+    RuleBlockSlackSecretScrape,
+    RuleEscalateCrossBorderSensitiveUpload
+)
+from execlayer_kernel.constants import DataClass, safe_parse_data_class
+import uuid
+
+MODE = os.getenv("EXECLAYER_MODE", "demo")
+
+app = FastAPI(title="ExecLayer Kernel", version="1.0.0")
+
+bundle = PolicyBundle(
+    bundle_id="bundle_execkernel_v1",
+    version="1.0.0",
+    rules=[
+        RuleBlockSelfPromptRewrite(rule_id="R-AGENT-001", priority=100, description="Block self constraint edits"),
+        RuleBlockSlackSecretScrape(rule_id="R-SECR-002", priority=90, description="Block credential harvesting"),
+        RuleBlockPublicPIIUpload(rule_id="R-DATA-003", priority=80, description="Block public regulated uploads"),
+        RuleEscalateCrossBorderSensitiveUpload(rule_id="R-DATA-004", priority=70, description="Escalate cross-border sensitive uploads"),
+    ]
+)
+
+kernel = ExecLayerKernel(
+    policy_bundle=bundle,
+    audit_log_path="/tmp/execlayer_audit.log.jsonl",
+    signing_secret=os.getenv("SIGNING_SECRET", "dev_secret_change_me").encode(),
+    mode=MODE
+)
+
+@app.get("/")
+async def root():
+    return {
+        "message": "ExecLayer Kernel v1.0 - Zero-Trust AI Governance",
+        "description": "An execution authority kernel that sits between agent intent and system action.",
+        "mode": MODE,
+        "compliance": {
+            "framework": "IAPP AIGP BoK 2.1",
+            "mapping": "Operationalizes BoK control intent at runtime",
+            "effective_date": "2026-02-02"
+        },
+        "storage_notice": "Receipts are immutable forensic artifacts. Long-term storage is a deployment configuration."
+    }
+
+@app.get("/api/health")
+async def health():
+    return {
+        "status": "healthy",
+        "kernel_version": "1.0.0",
+        "mode": MODE,
+        "policy_bundle": bundle.bundle_id
+    }
+
+@app.post("/api/intercept")
+async def intercept(request: Request):
+    try:
+        body = await request.json()
+        data_class, parse_warning = safe_parse_data_class(body.get("data_class"))
+
+        ctx = ExecutionContext(
+            actor=Actor(
+                id=body.get("actor_id", "anonymous"),
+                display=body.get("actor_display", "Unknown User"),
+                org_unit=body.get("org_unit", "default"),
+                role=body.get("role", "user")
+            ),
+            agent_id=body.get("agent_id", "unknown_agent"),
+            session_id=body.get("session_id", str(uuid.uuid4())[:8]),
+            intent=Intent(
+                statement=body.get("intent", "unknown operation"),
+                purpose=body.get("purpose", "general"),
+                business_process=body.get("process", "unspecified"),
+                ticket_id=body.get("ticket_id")
+            ),
+            environment=body.get("environment", "production"),
+            jurisdiction=body.get("jurisdiction", "US"),
+            data_class=data_class,
+            attributes={"parse_warning": parse_warning} if parse_warning else {}
+        )
+
+        result = kernel.intercept(ctx, body.get("tool_call", {}))
+        return result
+
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={
+                "error": "Kernel execution failed",
+                "message": str(e),
+                "receipt_id": f"err_{uuid.uuid4().hex[:8]}",
+                "note": "In production mode, this would emit a failure receipt with full context."
+            }
+        )
+
+@app.get("/api/demo")
+async def demo():
+    return {
+        "description": "ExecLayer is an execution authority kernel that sits between agent intent and system action.",
+        "mode": MODE,
+        "scenarios": [
+            {
+                "name": "Efficiency Exfil to Public Bucket",
+                "description": "Agent attempts to upload PII to public S3 for 'faster processing'",
+                "citation": "Mapped to AIGP BoK 2.1 Domain IV.A.3",
+                "control_id": "AIGP2.1-IV.A.3",
+                "expected_verdict": "BLOCK"
+            },
+            {
+                "name": "Slack Secret Scrape",
+                "description": "Agent searches message history for API keys",
+                "citation": "Mapped to AIGP BoK 2.1 Domain I.C.3",
+                "control_id": "AIGP2.1-I.C.3",
+                "expected_verdict": "BLOCK"
+            },
+            {
+                "name": "Self Prompt Rewrite",
+                "description": "Agent attempts to modify its own system constraints",
+                "citation": "Mapped to AIGP BoK 2.1 Domain IV.A.3",
+                "control_id": "AIGP2.1-IV.A.3",
+                "expected_verdict": "BLOCK"
+            }
+        ],
+        "storage": "Receipts are immutable forensic artifacts. In production, stream to your own store (S3, GCS, etc)."
+    }
+```
+
+## File: execlayer_kernel/__init__.py
+
+```python
+# Marks this directory as a Python package.
+```
+
+## File: execlayer_kernel/constants.py
+
+```python
+from enum import Enum
+from typing import Tuple, Optional
+
+class Verdict(str, Enum):
+    ALLOW = "ALLOW"
+    BLOCK = "BLOCK"
+    ESCALATE = "ESCALATE"
+
+class RiskTier(str, Enum):
+    LOW = "LOW"
+    MEDIUM = "MEDIUM"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+class DataClass(str, Enum):
+    PUBLIC = "PUBLIC"
+    INTERNAL = "INTERNAL"
+    CONFIDENTIAL = "CONFIDENTIAL"
+    PII = "PII"
+    PHI = "PHI"
+    PCI = "PCI"
+    SECRETS = "SECRETS"
+
+def safe_parse_data_class(value: any) -> Tuple[DataClass, Optional[str]]:
+    if value is None:
+        return DataClass.INTERNAL, "No data_class provided, defaulting to INTERNAL"
+    try:
+        str_value = str(value).upper().strip()
+        return DataClass(str_value), None
+    except (ValueError, KeyError):
+        return DataClass.INTERNAL, f"Invalid data_class '{value}', defaulting to INTERNAL"
+```
+
+## File: execlayer_kernel/bok.py
+
+```python
+BOK_2_1 = {
+    "SHADOW_AI": {
+        "framework": "IAPP AIGP BoK 2.1",
+        "domain": "Domain I.C.3",
+        "competency": "Third-Party Risk Management",
+        "control_id": "AIGP2.1-I.C.3",
+        "description": "Unauthorized use of unvetted credentials or shadow infrastructure."
+    },
+    "DATA_SOVEREIGNTY": {
+        "framework": "IAPP AIGP BoK 2.1",
+        "domain": "Domain II.A.3",
+        "competency": "Automated Decision-Making Laws (GDPR/EU AI Act)",
+        "control_id": "AIGP2.1-II.A.3",
+        "description": "Cross-border data transfer of PII to non-compliant storage."
+    },
+    "AGENTIC_ARCH": {
+        "framework": "IAPP AIGP BoK 2.1",
+        "domain": "Domain IV.A.3",
+        "competency": "Agentic Architectures - Unbounded Autonomy Risk",
+        "control_id": "AIGP2.1-IV.A.3",
+        "description": "Recursive self-modification or unauthorized constraint changes."
+    }
+}
+```
+
+## File: execlayer_kernel/schemas.py
+
+```python
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+from .constants import DataClass
+
+@dataclass(frozen=True)
+class ToolSchema:
+    name: str
+    allowed_params: List[str]
+    required_params: List[str]
+    produces: Optional[DataClass] = None
+    consumes: Optional[DataClass] = None
+
+TOOL_REGISTRY: Dict[str, ToolSchema] = {
+    "upload_file": ToolSchema(
+        name="upload_file",
+        allowed_params=["source", "destination", "file_size", "data_class", "jurisdiction"],
+        required_params=["source", "destination"],
+        consumes=DataClass.CONFIDENTIAL
+    ),
+    "read_slack_history": ToolSchema(
+        name="read_slack_history",
+        allowed_params=["channel", "search", "date_from", "date_to", "data_class"],
+        required_params=["channel"],
+        consumes=DataClass.INTERNAL
+    ),
+    "edit_system_prompt": ToolSchema(
+        name="edit_system_prompt",
+        allowed_params=["new_prompt", "reason"],
+        required_params=["new_prompt"],
+        consumes=DataClass.INTERNAL
+    )
+}
+```
+
+## File: execlayer_kernel/validation.py
+
+```python
+from typing import Any, Dict
+from .schemas import TOOL_REGISTRY
+
+class ValidationError(Exception):
+    pass
+
+def validate_tool_call(tool_call: Dict[str, Any]) -> None:
+    if "function" not in tool_call or "parameters" not in tool_call:
+        raise ValidationError("Tool call missing required keys: function, parameters")
+
+    fn = tool_call["function"]
+    params = tool_call["parameters"]
+
+    if fn not in TOOL_REGISTRY:
+        raise ValidationError(f"Unknown tool: {fn}")
+
+    schema = TOOL_REGISTRY[fn]
+
+    if not isinstance(params, dict):
+        raise ValidationError("parameters must be an object")
+
+    for req in schema.required_params:
+        if req not in params:
+            raise ValidationError(f"Missing required parameter: {req}")
+
+    for key in params.keys():
+        if key not in schema.allowed_params:
+            raise ValidationError(f"Disallowed parameter: {key}")
+```
+
+## File: execlayer_kernel/context.py
+
+```python
+from dataclasses import dataclass
+from typing import Dict, Optional
+from .constants import DataClass
+
+@dataclass(frozen=True)
+class Actor:
+    id: str
+    display: str
+    org_unit: str
+    role: str
+
+@dataclass(frozen=True)
+class Intent:
+    statement: str
+    purpose: str
+    business_process: str
+    ticket_id: Optional[str] = None
+
+@dataclass(frozen=True)
+class ExecutionContext:
+    actor: Actor
+    agent_id: str
+    session_id: str
+    intent: Intent
+    environment: str
+    jurisdiction: str
+    data_class: DataClass
+    attributes: Dict[str, str]
+```
+
+## File: execlayer_kernel/policy_bundle.py
+
+```python
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
+from .constants import RiskTier, Verdict
+
+@dataclass(frozen=True)
+class PolicyOutcome:
+    verdict: Verdict
+    risk_tier: RiskTier
+    risk_score: float
+    violation_key: Optional[str]
+    reason: str
+    rule_id: str
+
+@dataclass(frozen=True)
+class PolicyRule:
+    rule_id: str
+    priority: int
+    description: str
+
+    def evaluate(self, ctx, tool_name: str, params: Dict[str, Any]) -> Optional[PolicyOutcome]:
+        raise NotImplementedError
+
+@dataclass(frozen=True)
+class PolicyBundle:
+    bundle_id: str
+    version: str
+    rules: List[PolicyRule]
+```
+
+## File: execlayer_kernel/rules.py
+
+```python
+from typing import Any, Dict, Optional
+from .constants import DataClass, RiskTier, Verdict
+from .policy_bundle import PolicyOutcome, PolicyRule
+
+def _is_public_destination(dest: str) -> bool:
+    d = (dest or "").lower()
+    return ("public" in d) or ("://" in d and "internal" not in d and "private" not in d)
+
+def _looks_like_secret_search(term: str) -> bool:
+    t = (term or "").lower()
+    needles = ["api_key", "apikey", "secret", "token", "oauth", "password", "sig", "private_key"]
+    return any(n in t for n in needles)
+
+class RuleBlockPublicPIIUpload(PolicyRule):
+    def evaluate(self, ctx, tool_name: str, params: Dict[str, Any]) -> Optional[PolicyOutcome]:
+        if tool_name != "upload_file":
+            return None
+        data_class = params.get("data_class") or ctx.data_class.value
+        dest = params.get("destination", "")
+        if str(data_class).upper() in [DataClass.PII.value, DataClass.PHI.value, DataClass.PCI.value] and _is_public_destination(dest):
+            return PolicyOutcome(
+                verdict=Verdict.BLOCK,
+                risk_tier=RiskTier.CRITICAL,
+                risk_score=9.6,
+                violation_key="DATA_SOVEREIGNTY",
+                reason="Attempted transfer of regulated data to non-compliant destination.",
+                rule_id=self.rule_id
+            )
+        return None
+
+class RuleEscalateCrossBorderSensitiveUpload(PolicyRule):
+    def evaluate(self, ctx, tool_name: str, params: Dict[str, Any]) -> Optional[PolicyOutcome]:
+        if tool_name != "upload_file":
+            return None
+        data_class = params.get("data_class") or ctx.data_class.value
+        dest_juris = params.get("jurisdiction")
+        if str(data_class).upper() in [DataClass.CONFIDENTIAL.value, DataClass.PII.value, DataClass.PHI.value]:
+            if dest_juris and dest_juris != ctx.jurisdiction:
+                return PolicyOutcome(
+                    verdict=Verdict.ESCALATE,
+                    risk_tier=RiskTier.HIGH,
+                    risk_score=8.1,
+                    violation_key="DATA_SOVEREIGNTY",
+                    reason="Cross-jurisdiction data movement requires explicit approval and retention constraints.",
+                    rule_id=self.rule_id
+                )
+        return None
+
+class RuleBlockSlackSecretScrape(PolicyRule):
+    def evaluate(self, ctx, tool_name: str, params: Dict[str, Any]) -> Optional[PolicyOutcome]:
+        if tool_name != "read_slack_history":
+            return None
+        search = params.get("search", "")
+        if _looks_like_secret_search(search):
+            return PolicyOutcome(
+                verdict=Verdict.BLOCK,
+                risk_tier=RiskTier.HIGH,
+                risk_score=8.7,
+                violation_key="SHADOW_AI",
+                reason="Attempted credential harvesting from message history.",
+                rule_id=self.rule_id
+            )
+        return None
+
+class RuleBlockSelfPromptRewrite(PolicyRule):
+    def evaluate(self, ctx, tool_name: str, params: Dict[str, Any]) -> Optional[PolicyOutcome]:
+        if tool_name != "edit_system_prompt":
+            return None
+        return PolicyOutcome(
+            verdict=Verdict.BLOCK,
+            risk_tier=RiskTier.CRITICAL,
+            risk_score=9.9,
+            violation_key="AGENTIC_ARCH",
+            reason="Attempted modification of governance constraints.",
+            rule_id=self.rule_id
+        )
+```
+
+## File: execlayer_kernel/crypto.py
+
+```python
+import base64
+import hashlib
+import hmac
+import json
+from typing import Any, Dict, Optional
+
+def canonical_json(obj: Dict[str, Any]) -> str:
+    return json.dumps(obj, sort_keys=True, separators=(",", ":"),
