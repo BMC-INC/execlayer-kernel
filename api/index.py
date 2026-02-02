@@ -53,7 +53,7 @@ async def root():
         "storage_notice": "Receipts are immutable forensic artifacts. Long-term storage is a deployment configuration."
     }
 
-@app.get("/api/health")
+@app.get("/health")
 async def health():
     return {
         "status": "healthy",
@@ -62,7 +62,7 @@ async def health():
         "policy_bundle": bundle.bundle_id
     }
 
-@app.post("/api/intercept")
+@app.post("/intercept")
 async def intercept(request: Request):
     try:
         body = await request.json()
@@ -103,7 +103,7 @@ async def intercept(request: Request):
             }
         )
 
-@app.get("/api/demo")
+@app.get("/demo")
 async def demo():
     return {
         "description": "ExecLayer is an execution authority kernel that sits between agent intent and system action.",
@@ -133,3 +133,4 @@ async def demo():
         ],
         "storage": "Receipts are immutable forensic artifacts. In production, stream to your own store (S3, GCS, etc)."
     }
+
